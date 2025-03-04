@@ -25,8 +25,22 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 
+// This demo shows how to store and query vectors in GreptimeDB.
+//
+// Note: since use Qianwen, so you need to apply an API key of Qianwen from Alibaba Cloud.
+// And set environment variable, for example: `export DASHSCOPE_API_KEY=your_api_key`
+//
+// The process of demo
+// 1. Create the news_articles table.
+// 2. Download the data file from the internet.(AG_news_samples.csv)
+// 3. Read the data file and get the title and description.
+// 4. Embed the descriptions via Qianwen from Alibaba Cloud.
+// 5. Insert the title, description, and embedding into the news_articles table.
+// 6. Query the news_articles table via the vector function vec_dot_product.
+
 public class Main {
 	public static void main(String[] args) throws Exception {
+		// The default port(mysql) of GreptimeDB Edge is 4002.
 		String url = "jdbc:mysql://localhost:4002/public";
 		String user = "root";
 		String password = "";
@@ -63,8 +77,9 @@ public class Main {
 		List<List<String>> columns = main.readCsvFile(csvPath);
 
 		// 6. Embed the descriptions, convert the vector to string and add it to the
-		// columns.
-		List<List<Double>> embededDesc = main.embedDescriptions(columns.get(1), 1024);
+		// columns. Default dimension is 1024.
+		List<String> description_column = columns.get(1);
+		List<List<Double>> embededDesc = main.embedDescriptions(description_column);
 		List<String> embededDescString = main.embedDescriptionsToStr(embededDesc);
 		columns.add(embededDescString);
 
@@ -112,7 +127,7 @@ public class Main {
 	}
 
 	// Embedding the descriptions.
-	List<List<Double>> embedDescriptions(List<String> descriptions, int dimensions) {
+	List<List<Double>> embedDescriptions(List<String> descriptions) {
 		System.out.println("Start embedding for description! Please wait...");
 		List<List<Double>> embeddings = new ArrayList<>(descriptions.size());
 		List<String> inputs = new ArrayList<>(10);

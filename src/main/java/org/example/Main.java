@@ -4,6 +4,7 @@ import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -14,12 +15,14 @@ import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import java.io.IOException;
 import java.io.InputStream;
 
 public class Main {
@@ -28,54 +31,61 @@ public class Main {
 		String user = "root";
 		String password = "";
 
-		// Load the MySQL JDBC driver.
+		// 1. Load the MySQL JDBC driver.
 		Class.forName("com.mysql.cj.jdbc.Driver");
 
-		// Connect to GreptimeDB Edge.
+		// 2. Connect to GreptimeDB Edge.
 		Connection connection = DriverManager.getConnection(url, user, password);
 
 		Main main = new Main();
 
-		// Create the news_articles table.
+		// 3. Create the news_articles table.
 		//
-		// +-------------+------------------------+-----+------+---------------------+---------------+
-		// | Column | Type | Key | Null | Default | Semantic Type |
-		// +-------------+------------------------+-----+------+---------------------+---------------+
-		// | title | String | PRI | YES | | TAG |
-		// | description | String | | YES | | FIELD |
-		// | embedding | Vector(768) | | YES | | FIELD |
-		// | ts | TimestampMillisecond | PRI | NO | current_timestamp() | TIMESTAMP |
-		// +-------------+------------------------+-----+------+---------------------+---------------+
+                // 
+                // +-------------+------------------------+-----+------+---------------------+---------------+
+                // |   Column    |          Type          | Key | Null |       Default       | Semantic Type |
+                // +-------------+------------------------+-----+------+---------------------+---------------+
+                // | title       | String                 | PRI | YES  |                     | TAG           |
+                // | description | String                 |     | YES  |                     | FIELD         |
+                // | genre       | String                 |     | YES  |                     | FIELD         |
+                // | embedding   | Vector(1024)           |     | YES  |                     | FIELD         |
+                // | ts          | TimestampMillisecond   | PRI | NO   | current_timestamp() | TIMESTAMP     |
+                // +-------------+------------------------+-----+------+---------------------+---------------+
 		main.createNewsArticlesTable(connection);
 
 		String csvPath = "AG_news_samples.csv";
 		String csvUrl = "https://raw.githubusercontent.com/openai/openai-cookbook/main/examples/data/AG_news_samples.csv";
 
-		// Download the CSV file.
+		// 4. Download the CSV file.
 		main.downloadCsvFile(csvUrl, csvPath);
 
-		// Read the CSV file to columns which contains the title, description.
+		// 5. Read the CSV file to columns which contains the title, description.
 		List<List<String>> columns = main.readCsvFile(csvPath);
 
-		// Embed the descriptions, convert the vector to string and add it to the
+		// 6. Embed the descriptions, convert the vector to string and add it to the
 		// columns.
-		List<List<Float>> embededDesc = main.embedDescriptions(columns.get(1));
+		List<List<Double>> embededDesc = main.embedDescriptions(columns.get(1), 1024);
 		List<String> embededDescString = main.embedDescriptionsToStr(embededDesc);
 		columns.add(embededDescString);
 
-		// Create a Statement
+		// 7. Create a Statement
 		String prepareStatement = "Insert into news_articles (title, description, embedding) values (?, ?, ?)";
 		PreparedStatement statement = connection.prepareStatement(prepareStatement);
 
-		// Insert the data into the news_articles table.
+		// 8. Insert the data into the news_articles table.
+		System.out.println("Start inserting data.");
 		for (int i = 0; i < columns.get(0).size(); i++) {
 			String title = columns.get(0).get(i);
 			String description = columns.get(1).get(i);
 			String embedding = columns.get(2).get(i);
 			main.insertNewsArticle(statement, title, description, embedding);
 		}
+		System.out.println("Data inserted successfully.");
 
-		// Close the statement and connection.
+		// 9. Query the news_articles table and print the result.
+		main.queryNewsArticles(connection);
+
+		// 10. Close the statement and connection.
 		statement.close();
 		connection.close();
 
@@ -89,7 +99,7 @@ public class Main {
 			statement.setString(3, embedding);
 			statement.execute();
 		} catch (SQLException e) {
-			 e.printStackTrace();
+			e.printStackTrace();
 		}
 	}
 
@@ -102,29 +112,38 @@ public class Main {
 	}
 
 	// Embedding the descriptions.
-	List<List<Float>> embedDescriptions(List<String> descriptions) {
-		List<List<Float>> embededDesc = new ArrayList<>();
+	List<List<Double>> embedDescriptions(List<String> descriptions, int dimensions) {
+		System.out.println("Start embedding for description! Please wait...");
+		List<List<Double>> embeddings = new ArrayList<>(descriptions.size());
+		List<String> inputs = new ArrayList<>(10);
+		int i = 0;
 		for (String description : descriptions) {
-			embededDesc.add(embedDescription(description));
+			inputs.add(description);
+			if (i > 0 && i % 8 == 0) {
+				List<List<Double>> result = Qianwen.batchEmbeddingText(inputs);
+				for (List<Double> item : result) {
+					embeddings.add(item);
+				}
+				inputs.clear();
+			}
+			i++;
 		}
-		return embededDesc;
-	}
-
-	// Embedding the description.
-	List<Float> embedDescription(String description) {
-		// TODO: fix it
-		List<Float> embededDesc = new ArrayList<>(768);
-		for (int i = 0; i < 768; i++) {
-			embededDesc.add((float) i);
+		if (!inputs.isEmpty()) {
+			List<List<Double>> result = Qianwen.batchEmbeddingText(inputs);
+			for (List<Double> item : result) {
+				embeddings.add(item);
+			}
 		}
-		return embededDesc;
+		
+		System.out.println("Embedding for description is done.");
+		return embeddings;
 	}
 
 	// Convert the vector to string, which is convenient for inserting into the
 	// database.
-	List<String> embedDescriptionsToStr(List<List<Float>> descriptions) {
-		List<String> embededDescString = new ArrayList<>();
-		for (List<Float> description : descriptions) {
+	List<String> embedDescriptionsToStr(List<List<Double>> descriptions) {
+		List<String> embededDescString = new ArrayList<>(descriptions.size());
+		for (List<Double> description : descriptions) {
 			String str = "[";
 			for (int i = 0; i < description.size(); i++) {
 				str += description.get(i);
@@ -144,9 +163,10 @@ public class Main {
 		List<String> titles = new ArrayList<>();
 		List<String> descriptions = new ArrayList<>();
 
+		CSVFormat format = CSVFormat.Builder.create().setHeader().setSkipHeaderRecord(true).build();
+
 		try (FileReader reader = new FileReader(filePath);
-				CSVParser csvParser = new CSVParser(reader,
-						CSVFormat.DEFAULT.withFirstRecordAsHeader())) {
+				CSVParser csvParser = new CSVParser(reader, format)) {
 			for (CSVRecord csvRecord : csvParser) {
 				titles.add(csvRecord.get("title"));
 				descriptions.add(csvRecord.get("description"));
@@ -155,6 +175,7 @@ public class Main {
 			columns.add(descriptions);
 			System.out.println("CSV file processed successfully.");
 		} catch (Exception e) {
+			System.out.println("Error processing CSV file.");
 			e.printStackTrace();
 		}
 
@@ -173,10 +194,16 @@ public class Main {
 		try (CloseableHttpClient client = HttpClients.createDefault()) {
 			HttpGet req = new HttpGet(cvsFileUrl);
 			HttpResponse resp = client.execute(req);
-			HttpEntity entity = resp.getEntity();
+			int statusCode = resp.getStatusLine().getStatusCode();
 
+			if (statusCode != 200) {
+				System.out.println("Failed to download the file. HTTP error code: " + statusCode);
+				return;
+			}
+
+			HttpEntity entity = resp.getEntity();
 			if (entity == null) {
-				System.out.println("Failed to download the file.");
+				System.out.println("Failed to download the file. No content.");
 				return;
 			}
 
@@ -189,18 +216,21 @@ public class Main {
 				}
 			}
 			System.out.println("File downloaded successfully.");
-		} catch (Exception e) {
+		} catch (ClientProtocolException e) {
+			System.out.println("Protocol error during file download.");
+			e.printStackTrace();
+		} catch (IOException e) {
+			System.out.println("I/O error during file download.");
 			e.printStackTrace();
 		}
 	}
 
 	// Create the news_articles table in GreptimeDB Edge.
 	void createNewsArticlesTable(Connection connection) {
-		try {
-			Statement statement = connection.createStatement();
-			statement.execute(createTableSql());
-			System.out.println("Table news_articles is created！");
-			statement.close();
+		String createTableSQL = createTableSql();
+		try (Statement statement = connection.createStatement()) {
+			statement.execute(createTableSQL);
+			System.out.println("Table news_articles is created!");
 		} catch (SQLException e) {
 			System.out.println("Failed to create table news_articles.");
 			e.printStackTrace();
@@ -212,7 +242,7 @@ public class Main {
 		String createTableSQL = "CREATE TABLE IF NOT EXISTS news_articles (" +
 				"title STRING FULLTEXT," +
 				"description STRING FULLTEXT," +
-				"embedding VECTOR(768)," +
+				"embedding VECTOR(1024)," +
 				"ts timestamp default current_timestamp()," +
 				"PRIMARY KEY(title)," +
 				"TIME INDEX(ts)" +
@@ -221,4 +251,55 @@ public class Main {
 		return createTableSQL;
 	}
 
+	// Query the news_articles table.
+	void queryNewsArticles(Connection connection) {
+		String searchQuery = "China Sports";
+		List<String> searchQueries = new ArrayList<>();
+		searchQueries.add(searchQuery);
+
+		// Get the embedding for the search query
+		List<List<Double>> searchEmbeddingList = Qianwen.batchEmbeddingText(searchQueries);
+		if (searchEmbeddingList.isEmpty()) {
+			System.out.println("Failed to get embedding for the search query.");
+			return;
+		}
+		List<Double> searchEmbedding = searchEmbeddingList.get(0);
+
+		// Convert the embedding to a string format for SQL
+		StringBuilder embeddingStr = new StringBuilder("[");
+		for (int i = 0; i < searchEmbedding.size(); i++) {
+			embeddingStr.append(searchEmbedding.get(i));
+			if (i < searchEmbedding.size() - 1) {
+				embeddingStr.append(",");
+			}
+		}
+		embeddingStr.append("]");
+
+		// Prepare the SQL query
+		String queryStatement = "SELECT title, description, " +
+				"vec_dot_product(embedding, ?) AS score " +
+				"FROM news_articles " +
+				"ORDER BY score DESC " +
+				"LIMIT 10";
+
+		System.out.println("Querying news_articles table, sql: " + queryStatement);
+
+		try (PreparedStatement preparedStatement = connection.prepareStatement(queryStatement)) {
+			preparedStatement.setString(1, embeddingStr.toString());
+
+			// Execute the query
+			try (ResultSet resultSet = preparedStatement.executeQuery()) {
+				while (resultSet.next()) {
+					String title = resultSet.getString("title");
+					String description = resultSet.getString("description");
+					double score = resultSet.getDouble("score");
+					System.out.println("Title: " + title + ", Description: " + description
+							+ ", Score: " + score);
+				}
+			}
+		} catch (SQLException e) {
+			System.out.println("Failed to query news_articles.");
+			e.printStackTrace();
+		}
+	}
 }

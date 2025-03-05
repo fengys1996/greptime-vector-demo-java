@@ -255,8 +255,8 @@ public class Main {
 	// Get the create table(news_articles) SQL.
 	String createTableSql() {
 		String createTableSQL = "CREATE TABLE IF NOT EXISTS news_articles (" +
-				"title STRING FULLTEXT," +
-				"description STRING FULLTEXT," +
+				"title STRING," +
+				"description STRING," +
 				"embedding VECTOR(1024)," +
 				"ts timestamp default current_timestamp()," +
 				"PRIMARY KEY(title)," +
